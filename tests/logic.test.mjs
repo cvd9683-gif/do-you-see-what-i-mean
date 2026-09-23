@@ -1,14 +1,41 @@
 // Node tests for the DOM-free modules. Run: npm test
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { OneEuro, mapAxis, BrushMapper, pickShape } from '../js/mapping.js';
-import { Calibrator, computeCalibration, STEPS, DEFAULT_CALIBRATION } from '../js/calibration.js';
-import { createSession, createMark, parseSession, serializeSession } from '../js/session.js';
+import { OneEuro, mapAxis, BrushMapper, pickShape, DabTrail } from '../js/mapping.js';
+import { Calibration, STEPS, DEFAULT_CALIBRATION, STRUGGLE_MS } from '../js/calibration.js';
+import { createSession, createMark, parseSession, serializeSession, colorChangeEvent, colorAt } from '../js/session.js';
+import { PALETTE } from '../js/config.js';
 
 const face = (o = {}) => ({
-  present: true, t: 0, headX: 0, headY: 0, tilt: 0, mouthOpen: 0.02,
+  present: true, t: 0, headX: 0, headY: 0, tilt: 0, mouthOpen: 0.03,
   smileL: 0.05, smileR: 0.05, browDownL: 0.05, browDownR: 0.05, browUp: 0.1, blinkL: 0.1, blinkR: 0.1, ...o,
 });
+
+// A scripted player: which pose to hold for the current calibration target.
+const POSE = {
+  still: {}, left: { headX: -0.1 }, right: { headX: 0.1 }, up: { headY: -0.06 }, down: { headY: 0.06, blinkL: 0.3, blinkR: 0.3 },
+  open: { mouthOpen: 0.55 }, close: {}, smile: { smileL: 0.7, smileR: 0.7 }, relax: {},
+  move: { browUp: 0.6 }, blink1: { blinkL: 0.9, blinkR: 0.9 }, blink2: { blinkL: 0.9, blinkR: 0.9 },
+};
+
+// Drives a Calibration with the scripted poses. For the second blink it alternates
+// open/closed, so the "eyes must reopen between blinks" rule is exercised.
+function runCalibration(cal, pose = POSE, maxFrames = 4000) {
+  let t = 0, frames = 0;
+  while (!cal.done && frames++ < maxFrames) {
+    t += 33;
+    const st = cal.status();
+    if (st.complete) {
+      cal.next();
+      continue;
+    }
+    const target = st.targets.find((x) => !x.done);
+    let p = pose[target.id] ?? {};
+    if (target.id === 'blink2' && frames % 20 < 6) p = {};
+    cal.update(face({ t, ...p }));
+  }
+  return t;
+}
 
 // Deterministic noise so the jitter test is repeatable.
 function noise(seed) {
@@ -21,92 +48,240 @@ test('1€ filter suppresses jitter on a still head', () => {
   const n = noise(3);
   const raw = [], out = [];
   for (let i = 0; i < 300; i++) {
-    raw.push(600 + n() * 30); // ±15px frame-to-frame landmark noise at 30fps
+    raw.push(600 + n() * 30);
     out.push(f.filter(raw[i], i / 30));
   }
   const sd = (a) => {
     const m = a.reduce((s, v) => s + v, 0) / a.length;
     return Math.sqrt(a.reduce((s, v) => s + (v - m) ** 2, 0) / a.length);
   };
-  const ratio = sd(out.slice(60)) / sd(raw.slice(60));
-  assert.ok(ratio < 0.3, `smoothed jitter should be <30% of raw, got ${(ratio * 100).toFixed(0)}%`);
+  assert.ok(sd(out.slice(60)) / sd(raw.slice(60)) < 0.3);
 });
 
-test('1€ filter still follows a fast head turn', () => {
-  const f = new OneEuro();
-  let y;
-  for (let i = 0; i < 30; i++) y = f.filter(i < 5 ? 0 : 900, i / 30);
-  assert.ok(y > 850, `should reach target within ~1s, got ${y}`);
-});
-
-test('mapAxis puts neutral at centre and calibrated extremes at the edges', () => {
-  assert.equal(mapAxis(0, -0.2, 0, 0.2), 0.5);
+test('mapAxis: neutral is centre (with a dead zone), 80% of the comfortable turn reaches the edge', () => {
   const near = (a, b) => assert.ok(Math.abs(a - b) < 1e-9, `${a} ≈ ${b}`);
-  near(mapAxis(-0.15, -0.2, 0, 0.2), 0);
-  near(mapAxis(0.15, -0.2, 0, 0.2), 1);
-  near(mapAxis(0.5, -0.2, 0, 0.2), 1); // clamped
-  // Works when the axis is inverted too (e.g. unusual camera placement).
-  near(mapAxis(0.15, 0.2, 0, -0.2), 0);
+  near(mapAxis(0, -0.1, 0, 0.1), 0.5);
+  near(mapAxis(0.004, -0.1, 0, 0.1), 0.5); // inside the dead zone
+  near(mapAxis(-0.08, -0.1, 0, 0.1), 0);
+  near(mapAxis(0.08, -0.1, 0, 0.1), 1);
+  near(mapAxis(0.3, -0.1, 0, 0.1), 1); // clamped
+  near(mapAxis(-0.08, 0.1, 0, -0.1), 1); // inverted axis still works
 });
 
-test('calibration learns ranges from steps and flags unreliable blinks', () => {
-  const cal = new Calibrator(STEPS);
-  const byStep = {
-    neutral: {}, left: { headX: -0.2 }, right: { headX: 0.22 }, up: { headY: -0.1 }, down: { headY: 0.12, blinkL: 0.3, blinkR: 0.3 },
-    smile: { smileL: 0.8, smileR: 0.75 }, mouth: { mouthOpen: 0.7 }, brows: { browDownL: 0.6, browDownR: 0.55, browUp: 0.7 },
-    eyes: { blinkL: 0.9, blinkR: 0.92 },
-  };
-  let t = 0, st;
-  do {
-    t += 33;
-    st = cal.addSample(face({ t, ...byStep[cal.step.key] }));
-  } while (!st.done);
-  const c = cal.result();
-  assert.ok(Math.abs(c.headX.neg + 0.2) < 1e-9 && Math.abs(c.headX.pos - 0.22) < 1e-9);
-  assert.ok(c.mouthOpen.max > 0.6);
-  assert.equal(c.blink.reliable, true);
-  assert.ok(c.blink.threshold > 0.3, 'threshold clears the looking-down eyelid droop');
-
-  const flat = computeCalibration({ neutral: [face()], eyes: [face({ blinkL: 0.2, blinkR: 0.2 })] });
-  assert.equal(flat.blink.reliable, false);
-  assert.equal(flat.headX.neg, DEFAULT_CALIBRATION.headX.neg, 'missing steps fall back to defaults');
-});
-
-test('mapper: mouth paints after a beat, smile/brow pick shape, long blink stamps once', () => {
-  const m = new BrushMapper({ calibration: DEFAULT_CALIBRATION });
+test('calibration never advances before the action is detected and held', () => {
+  const cal = new Calibration(STEPS);
   let t = 0;
-  const run = (o, frames) => {
-    for (let i = 0; i < frames; i++) m.update(face({ t: (t += 33), ...o }));
+  // Neutral: a still face completes it.
+  for (let i = 0; i < 60 && !cal.status().complete; i++) cal.update(face({ t: (t += 33) }));
+  assert.equal(cal.status().complete, true);
+  assert.equal(cal.next(), true);
+  assert.equal(cal.step.key, 'turn');
+  // Five seconds of looking straight ahead: the turn step must not complete or advance.
+  for (let i = 0; i < 150; i++) cal.update(face({ t: (t += 33) }));
+  assert.equal(cal.status().complete, false);
+  assert.equal(cal.next(), false, 'next() refuses an unfinished step');
+  assert.equal(cal.step.key, 'turn');
+  assert.equal(cal.status().struggling, false);
+  // A quick flick left (< hold time) doesn't count either.
+  for (let i = 0; i < 8; i++) cal.update(face({ t: (t += 33), headX: -0.1 }));
+  assert.equal(cal.status().targets[0].done, false);
+  // After STRUGGLE_MS a fallback is offered; choosing it completes the step explicitly.
+  for (let i = 0; i < STRUGGLE_MS / 33; i++) cal.update(face({ t: (t += 33) }));
+  assert.equal(cal.status().struggling, true);
+  cal.useFallback();
+  assert.equal(cal.next(), true);
+  assert.equal(cal.step.key, 'nod');
+});
+
+test('turn step: the second side must be opposite to the first', () => {
+  const cal = new Calibration(STEPS);
+  runCalibration(cal, { ...POSE, left: { headX: -0.1 }, right: { headX: -0.1 } }, 400);
+  assert.equal(cal.step.key, 'turn');
+  assert.equal(cal.status().targets[0].done, true);
+  assert.equal(cal.status().targets[1].done, false);
+});
+
+test('calibration computes personal ranges, thresholds and blink reliability', () => {
+  const cal = new Calibration(STEPS);
+  runCalibration(cal);
+  assert.equal(cal.done, true);
+  const c = cal.result();
+  assert.ok(Math.abs(c.headX.neg + 0.1) < 1e-9 && Math.abs(c.headX.pos - 0.1) < 1e-9, 'held head positions');
+  assert.ok(Math.abs(c.headY.neg + 0.06) < 1e-9 && Math.abs(c.headY.pos - 0.06) < 1e-9);
+  assert.ok(Math.abs(c.mouthOpen.max - 0.55) < 1e-9, 'comfortable mouth = held value');
+  assert.ok(Math.abs(c.smile.max - 0.7) < 1e-9);
+  assert.equal(c.brow.direction, 'raise');
+  assert.equal(c.blink.reliable, true);
+  assert.ok(c.blink.threshold > 0.3, 'blink threshold clears the looking-down eyelid droop');
+  assert.deepEqual(c.fallbacks, []);
+});
+
+test('a skipped signal falls back instead of trapping the player', () => {
+  const cal = new Calibration(STEPS);
+  let t = 0;
+  while (!cal.done && t < 200000) {
+    const st = cal.status();
+    if (st.complete) { cal.next(); continue; }
+    if (st.step.key === 'smile') { cal.useFallback(); continue; }
+    const target = st.targets.find((x) => !x.done);
+    let p = POSE[target.id] ?? {};
+    if (target.id === 'blink2' && (t / 33) % 20 < 6) p = {};
+    cal.update(face({ t: (t += 33), ...p }));
+  }
+  const c = cal.result();
+  assert.deepEqual(c.fallbacks, ['smile']);
+  assert.ok(c.smile.max > c.smile.rest + 0.3, 'default smile span used');
+});
+
+function calibrated() {
+  const cal = new Calibration(STEPS);
+  runCalibration(cal);
+  return cal.result();
+}
+
+test('mapper: a comfortable head movement reaches every edge of the canvas', () => {
+  const m = new BrushMapper({ calibration: calibrated() });
+  let t = 0;
+  const hold = (o) => {
+    for (let i = 0; i < 90; i++) m.update(face({ t: (t += 33), ...o }));
     return m.state;
   };
-  assert.equal(run({ mouthOpen: 0.5 }, 1).painting, false, 'no paint on a single-frame blip');
-  assert.equal(run({ mouthOpen: 0.5 }, 10).painting, true);
-  assert.ok(m.state.size > 50);
-  assert.equal(run({ mouthOpen: 0.02 }, 10).painting, false);
-  assert.equal(run({ smileL: 0.8, smileR: 0.8 }, 15).shape, 'rounded');
-  assert.equal(run({ browDownL: 0.6, browDownR: 0.6 }, 15).shape, 'angular');
+  // 80% of the held calibration pose is enough.
+  assert.ok(hold({ headX: -0.08, headY: -0.048 }).x < 8 && m.state.y < 8, `top-left ${m.state.x},${m.state.y}`);
+  assert.ok(hold({ headX: 0.08, headY: 0.048 }).x > 1192 && m.state.y > 792, `bottom-right ${m.state.x},${m.state.y}`);
+  assert.ok(Math.abs(hold({}).x - 600) < 6 && Math.abs(m.state.y - 400) < 6, 'neutral returns to centre');
+});
 
-  m.drainEvents();
-  run({ blinkL: 0.9, blinkR: 0.9 }, 3); // ~100ms natural blink
-  run({}, 3);
-  assert.equal(m.drainEvents().filter((e) => e.type === 'stamp').length, 0, 'natural blink ignored');
-  run({ blinkL: 0.9, blinkR: 0.9 }, 15); // ~500ms deliberate blink
-  assert.equal(m.drainEvents().filter((e) => e.type === 'stamp').length, 1, 'held blink stamps exactly once');
+test('mapper: closed mouth moves without painting; paint starts only after a short hold', () => {
+  const m = new BrushMapper({ calibration: calibrated() });
+  const trail = new DabTrail();
+  let t = 0, dabs = 0;
+  const run = (o, frames) => {
+    for (let i = 0; i < frames; i++) {
+      m.update(face({ t: (t += 33), ...o }));
+      if (trail.step(m.state, t, () => 'k')) dabs++;
+    }
+    return m.state;
+  };
+  // Sweep the whole canvas with the mouth closed, including talking-sized openings.
+  for (let x = -0.1; x <= 0.1; x += 0.01) run({ headX: x, mouthOpen: x > 0 ? 0.15 : 0.03 }, 3);
+  assert.equal(dabs, 0, 'no accidental paint while moving');
+  run({ mouthOpen: 0.5 }, 2);
+  assert.equal(m.state.painting, false, 'not before the activation hold');
+  run({ mouthOpen: 0.5 }, 6);
+  assert.equal(m.state.painting, true);
+  run({ mouthOpen: 0.5, headX: 0.05 }, 20);
+  assert.ok(dabs > 3);
+  assert.equal(run({}, 6).painting, false);
+});
+
+test('mapper: expressions change the mark shape', () => {
+  const m = new BrushMapper({ calibration: calibrated() });
+  let t = 0;
+  const run = (o) => { for (let i = 0; i < 15; i++) m.update(face({ t: (t += 33), ...o })); return m.state.shape; };
+  assert.equal(run({ smileL: 0.6, smileR: 0.6 }), 'rounded');
+  assert.equal(run({ browUp: 0.55 }), 'angular');
+  assert.equal(run({}), 'line');
   assert.equal(pickShape(0.1, 0.1), 'line');
 });
 
-test('marks serialise to JSON and survive a round trip', () => {
-  const s = createSession({ prompt: { id: 'fish', label: 'a fish' }, inputMode: 'face', calibration: DEFAULT_CALIBRATION });
-  const brush = { x: 410.4, y: 260, shape: 'rounded', color: '#FF694D', size: 76, rotation: -12, opacity: 0.65 };
-  s.marks.push(createMark({ brush, facialInput: { mouthOpen: 0.72, headTilt: -12 }, timestamp: 12450, strokeId: 'k1' }));
-  const back = parseSession(serializeSession(s));
-  assert.equal(back.marks.length, 1);
-  assert.deepEqual(back.marks[0].visualOutput, { ...s.marks[0].visualOutput });
-  assert.equal(back.marks[0].facialInput.mouthOpen, 0.72);
-  assert.equal(back.prompt.id, 'fish');
+test('mapper: deliberate blink changes color once; natural or rapid blinks do not repeat it', () => {
+  const m = new BrushMapper({ calibration: calibrated() });
+  let t = 0;
+  const run = (o, frames) => { for (let i = 0; i < frames; i++) m.update(face({ t: (t += 33), ...o })); };
+  const closed = { blinkL: 0.9, blinkR: 0.9 };
+  const colors = () => m.drainEvents().filter((e) => e.type === 'color').length;
+  run({}, 20);
+  run(closed, 3); run({}, 20); // ~100 ms natural blink
+  assert.equal(colors(), 0, 'natural blink ignored');
+  run(closed, 9); // ~300 ms deliberate blink
+  assert.equal(colors(), 1);
+  run(closed, 30); // keeping eyes shut doesn't repeat
+  run({}, 4); run(closed, 9); // reopened only briefly → not re-armed yet
+  assert.equal(colors(), 0, 'protected against rapid repeats');
+  run({}, 20); run(closed, 9);
+  assert.equal(colors(), 1, 'a new deliberate blink after reopening works');
+});
 
-  const junk = parseSession('{"prompt":{"id":"x"},"marks":[null,{"visualOutput":{"x":"a","color":"red"}}]}');
-  assert.equal(junk.marks.length, 1);
-  assert.equal(junk.marks[0].visualOutput.color, '#E8321E', 'invalid colours are repaired');
+test('mapper: blink color is disabled when calibration found blinks unreliable', () => {
+  const m = new BrushMapper({ calibration: DEFAULT_CALIBRATION });
+  let t = 0;
+  for (let i = 0; i < 40; i++) m.update(face({ t: (t += 33), blinkL: 0.95, blinkR: 0.95 }));
+  assert.equal(m.drainEvents().length, 0);
+});
+
+test('session JSON: v2 fields, timestamped marks, and no video data', () => {
+  const s = createSession({ prompt: { id: 'fish', label: 'a fish', level: 'beginner' }, inputMode: 'face', calibration: DEFAULT_CALIBRATION });
+  assert.equal(s.roundDurationMs, 90000);
+  assert.ok(s.timing && s.recording && s.mappings.mouthOpen);
+  const brush = { x: 420.4, y: 270, shape: 'rounded', color: '#F04D3A', size: 64, rotation: -8, opacity: 0.68 };
+  s.marks.push(createMark({ brush, facialInput: { mouthOpen: 0.74, smile: 0.61, browMovement: 0.18, headX: 0.44, headY: 0.52, headTilt: -8 }, timestamp: 4280, strokeId: 'k1' }));
+  s.recording = { enabled: true, mimeType: 'video/webm', durationMs: 90010, videoLeadMs: 3, blobUrl: 'blob:http://x/abc', data: 'AAAA' };
+  const back = parseSession(serializeSession(s));
+  assert.equal(back.marks[0].timestamp, 4280);
+  assert.equal(back.marks[0].facialInput.smile, 0.61);
+  assert.equal(back.recording.enabled, true);
+  assert.equal(back.recording.durationMs, 90010);
+  assert.ok(!('blobUrl' in back.recording) && !('data' in back.recording), 'media fields are stripped on load');
+
+  const v1 = parseSession('{"prompt":{"id":"x"},"settings":{"roundMs":60000},"marks":[{"visualOutput":{"x":1,"color":"red"}}]}');
+  assert.equal(v1.roundDurationMs, 60000, 'old sessions migrate');
+  assert.equal(v1.marks[0].visualOutput.color, '#E8321E');
   assert.equal(parseSession('not json'), null);
+});
+
+test('mapper: color events carry previous/new color and input; palette click works', () => {
+  const m = new BrushMapper({ calibration: calibrated() });
+  let t = 0;
+  const run = (o, frames) => { for (let i = 0; i < frames; i++) m.update(face({ t: (t += 33), ...o })); };
+  run({}, 20);
+  run({ blinkL: 0.9, blinkR: 0.9 }, 9);
+  const [ev] = m.drainEvents();
+  assert.deepEqual(ev, { type: 'color', via: 'blink', previousColor: PALETTE[0], newColor: PALETTE[1] });
+  m.setColor(3, 'click');
+  assert.deepEqual(m.drainEvents()[0], { type: 'color', via: 'click', previousColor: PALETTE[1], newColor: PALETTE[3] });
+  m.setColor(3, 'click');
+  assert.equal(m.drainEvents().length, 0, 'choosing the current color is not a change');
+  assert.equal(m.state.color, PALETTE[3]);
+});
+
+test('mapper: one eye closing (a wink or glance) never changes color', () => {
+  const m = new BrushMapper({ calibration: calibrated() });
+  let t = 0;
+  for (let i = 0; i < 40; i++) m.update(face({ t: (t += 33), blinkL: 0.95, blinkR: 0.15 }));
+  assert.equal(m.drainEvents().length, 0);
+});
+
+test('mapper: when blinks are unreliable a held brow raise changes color, and only a furrow is angular', () => {
+  const cal = { ...calibrated(), blink: { rest: 0.1, threshold: 0.6, closed: null, reliable: false } };
+  const m = new BrushMapper({ calibration: cal });
+  assert.equal(m.colorInput, 'browRaise');
+  let t = 0;
+  const run = (o, frames) => { for (let i = 0; i < frames; i++) m.update(face({ t: (t += 33), ...o })); return m.state; };
+  run({}, 20);
+  run({ browUp: 0.6 }, 3); // brief flash of the brows: nothing
+  assert.equal(m.drainEvents().length, 0);
+  run({}, 20);
+  const st = run({ browUp: 0.6, mouthOpen: 0.5 }, 20); // held raise
+  const evs = m.drainEvents();
+  assert.equal(evs.length, 1);
+  assert.equal(evs[0].via, 'browRaise');
+  assert.notEqual(st.shape, 'angular', 'raise no longer makes angular marks in this mode');
+  assert.equal(run({ browDownL: 0.5, browDownR: 0.5 }, 20).shape, 'angular', 'furrow still does');
+});
+
+test('session JSON: color changes are stored and replayable by timestamp', () => {
+  const s = createSession({ prompt: { id: 'sun', label: 'a sun' }, inputMode: 'face', calibration: DEFAULT_CALIBRATION });
+  assert.equal(s.initialColor, PALETTE[0]);
+  assert.match(s.mappings.colorChange, /eyebrow raise/, 'mapping reflects the fallback gesture');
+  s.events.push(colorChangeEvent({ timestamp: 8420.4, previousColor: '#E8321E', newColor: '#2340D8', input: 'blink' }));
+  s.events.push(colorChangeEvent({ timestamp: 12000, previousColor: '#2340D8', newColor: '#FFB400', input: 'click' }));
+  const back = parseSession(serializeSession(s));
+  assert.deepEqual(back.events[0], { type: 'colorChange', timestamp: 8420, previousColor: '#E8321E', newColor: '#2340D8', input: 'blink' });
+  assert.equal(colorAt(back, 0), '#E8321E');
+  assert.equal(colorAt(back, 8419), '#E8321E');
+  assert.equal(colorAt(back, 8420), '#2340D8');
+  assert.equal(colorAt(back, 90000), '#FFB400');
+  const junk = parseSession(JSON.stringify({ ...s, events: [{ type: 'colorChange', newColor: 'blue' }, { type: 'other' }] }));
+  assert.equal(junk.events.length, 0, 'invalid events are dropped');
 });

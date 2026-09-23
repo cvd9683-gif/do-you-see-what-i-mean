@@ -18,13 +18,13 @@
     <button class="wordmark" type="button" data-action="home" hidden>Do You See What I Mean?</button>
     <div class="camera-pill" id="camera-pill" role="status" hidden>
       <span class="rec" aria-hidden="true"></span>
-      <span>Camera on</span>
+      <span id="camera-pill-text">Camera on</span>
       <button type="button" data-action="quit">Turn off and exit</button>
     </div>
   </header>
 
   <main id="main">
-    <!-- 1. Landing -->
+    <!-- Landing -->
     <section class="screen screen-landing" id="screen-landing" aria-labelledby="title">
       <canvas class="hero-paint" id="hero-canvas" aria-hidden="true"></canvas>
       <div class="landing-copy">
@@ -34,7 +34,7 @@
           <button class="btn btn-primary" type="button" id="btn-start">Start</button>
           <button class="btn" type="button" id="btn-continue" hidden>Continue</button>
         </div>
-        <p class="note">Your webcam is analyzed on this device. No camera images are saved or sent anywhere.</p>
+        <p class="note">Your webcam is analyzed on this device. Nothing is uploaded.</p>
       </div>
       <div class="gallery" id="gallery" hidden>
         <h2>Your paintings</h2>
@@ -43,13 +43,14 @@
       <button class="text-btn reset" type="button" id="btn-reset">Reset saved data</button>
     </section>
 
-    <!-- 2a. Why we need the camera -->
+    <!-- Why we need the camera -->
     <section class="screen screen-consent" id="screen-consent" aria-labelledby="consent-title" hidden>
       <h2 class="big" id="consent-title">Your face is the brush.</h2>
       <p class="lede">To paint, the game needs to watch how your head and face move. Your browser will ask to use the camera next.</p>
       <ul class="facts">
         <li>Each video frame is analyzed by a face-tracking model inside this browser tab, then discarded.</li>
-        <li>No images of you are stored or uploaded. Only numbers, like how open your mouth is, are kept with your painting.</li>
+        <li>Only numbers, like how open your mouth is, are kept with your painting.</li>
+        <li>Before the round you can choose whether to record your face for a replay. That video stays in this browser session and is never uploaded.</li>
         <li>The camera turns off when the round ends, or whenever you choose “Turn off and exit”.</li>
       </ul>
       <div class="actions">
@@ -60,80 +61,191 @@
       <p class="error" id="consent-error" role="alert"></p>
     </section>
 
-    <!-- 2b. Calibration -->
-    <section class="screen screen-calibrate" id="screen-calibrate" aria-labelledby="calib-instruction" hidden>
-      <div class="calib-video" id="calib-video-slot"></div>
-      <div class="calib-side">
-        <p class="calib-count" id="calib-count">Getting ready</p>
-        <h2 class="big" id="calib-instruction" aria-live="polite">Loading the face model…</h2>
-        <div class="bar" aria-hidden="true"><span id="calib-bar"></span></div>
-        <p class="hint" id="calib-hint">This takes about twenty seconds. Nothing you do here is painted.</p>
+    <!-- Calibration: gated, one action per step. The instruction is the biggest thing on screen. -->
+    <section class="screen screen-calibrate" id="screen-calibrate" aria-labelledby="calib-title" hidden>
+      <div class="calib-main" id="calib-side">
+        <p class="calib-label" id="calib-count">CALIBRATION · GETTING READY</p>
+        <ol class="calib-steps" id="calib-dots" aria-label="Calibration progress"></ol>
+        <h2 class="calib-instruction" id="calib-title">Loading the face model…</h2>
+        <p class="calib-hint" id="calib-say">This takes a few seconds the first time.</p>
+        <div class="calib-feedback">
+          <svg class="demo-face" id="calib-demo" data-demo="neutral" viewBox="0 0 140 140" aria-hidden="true">
+            <g class="arrows arrows-x"><path d="M8 70 l12 -9 v18z" /><path d="M132 70 l-12 -9 v18z" /></g>
+            <g class="arrows arrows-y"><path d="M70 6 l-9 12 h18z" /><path d="M70 134 l-9 -12 h18z" /></g>
+            <g class="head">
+              <circle class="skull" cx="70" cy="70" r="46" />
+              <g class="features">
+                <path class="brow" d="M44 50 h18" /><path class="brow" d="M78 50 h18" />
+                <g class="eyes"><ellipse cx="53" cy="63" rx="4.5" ry="5.5" /><ellipse cx="87" cy="63" rx="4.5" ry="5.5" /></g>
+                <path class="mouth mouth-neutral" d="M56 92 Q70 94 84 92" />
+                <path class="mouth mouth-smile" d="M52 87 Q70 106 88 87" />
+                <ellipse class="mouth mouth-open" cx="70" cy="93" rx="9" ry="12" />
+              </g>
+            </g>
+          </svg>
+          <div class="calib-detect">
+            <p class="calib-status" id="calib-status" aria-live="polite"></p>
+            <ul class="calib-targets" id="calib-targets"></ul>
+            <div class="meter" id="calib-meter" aria-hidden="true"><span class="fill"></span><span class="mark"></span></div>
+          </div>
+        </div>
         <div class="actions">
-          <button class="btn" type="button" id="btn-calib-mouse">Use a mouse instead</button>
+          <button class="btn btn-small" type="button" id="btn-calib-retry" hidden>Retry this step</button>
+          <button class="btn btn-small" type="button" id="btn-calib-fallback" hidden>Continue without this signal</button>
+          <button class="text-btn" type="button" id="btn-calib-mouse">Use a mouse instead</button>
+        </div>
+      </div>
+      <aside class="calib-aside">
+        <div class="calib-video" id="calib-video-slot"></div>
+        <div class="signal-panel" id="calib-signals" aria-label="Signals the face tracker is detecting right now">
+          <p class="panel-title">What the tracker detects</p>
+          <div class="sig" data-sig="head"><span class="sig-name">Head position</span><span class="sig-pad" aria-hidden="true"><i></i></span></div>
+          <div class="sig" data-sig="mouth"><span class="sig-name">Mouth open</span><span class="sig-bar" aria-hidden="true"><i></i></span></div>
+          <div class="sig" data-sig="smile"><span class="sig-name">Smile movement</span><span class="sig-bar" aria-hidden="true"><i></i></span></div>
+          <div class="sig" data-sig="brow"><span class="sig-name">Brow movement</span><span class="sig-bar" aria-hidden="true"><i></i></span></div>
+          <div class="sig" data-sig="blink"><span class="sig-name">Eyes closed</span><span class="sig-bar" aria-hidden="true"><i></i></span></div>
+        </div>
+      </aside>
+    </section>
+
+    <!-- Practice: untimed, nothing kept -->
+    <section class="screen screen-practice" id="screen-practice" aria-labelledby="practice-title" hidden>
+      <div class="draw-head">
+        <h2 id="practice-title">Warm up</h2>
+        <p class="hint">Untimed. Nothing here is kept.</p>
+      </div>
+      <div class="draw-body">
+        <aside class="draw-side">
+          <div class="preview" id="practice-video-slot"></div>
+          <ol class="objectives" id="objectives">
+            <li data-obj="targets"><span class="box" aria-hidden="true"></span><span>Steer the cursor into both circles <b class="count" id="obj-targets-count">0/2</b></span></li>
+            <li data-obj="paint"><span class="box" aria-hidden="true"></span><span>Open your mouth to paint. Close it to stop.</span></li>
+            <li data-obj="expression"><span class="box" aria-hidden="true"></span><span>While painting, change the mark with an expression.</span></li>
+          </ol>
+          <p class="practice-note" id="practice-note" aria-live="polite">Everything else is yours to discover.</p>
+          <div class="tools">
+            <button class="btn btn-small" type="button" id="btn-practice-clear">Clear practice</button>
+            <button class="btn btn-small btn-primary" type="button" id="btn-ready">I’m ready</button>
+          </div>
+        </aside>
+        <div class="canvas-frame">
+          <canvas id="practice-canvas" aria-label="Practice canvas"></canvas>
         </div>
       </div>
     </section>
 
-    <!-- 3. Prompt reveal -->
+    <!-- Recording choice -->
+    <section class="screen screen-record" id="screen-record" aria-labelledby="record-title" hidden>
+      <h2 class="big" id="record-title">Record a face replay?</h2>
+      <p class="lede">Your camera video can be recorded for the replay, but it stays in this browser session and is never uploaded.</p>
+      <ul class="facts">
+        <li>At the end you’ll watch your face and your painting side by side, in sync.</li>
+        <li>Recording starts with the round timer and stops when the round ends. A red “Recording” label shows the whole time.</li>
+        <li>The video is held in memory only. It’s gone when you delete it, start a new game, leave, or reload the page.</li>
+        <li>Your painting is saved as lightweight JSON either way.</li>
+      </ul>
+      <div class="actions">
+        <button class="btn btn-primary" type="button" id="btn-record-yes">Record my face replay</button>
+        <button class="btn" type="button" id="btn-record-no">Continue without recording</button>
+      </div>
+      <p class="hint" id="record-unsupported" hidden>This browser can’t record video here, so the replay will show your painting only.</p>
+    </section>
+
+    <!-- Prompt reveal -->
     <section class="screen screen-prompt" id="screen-prompt" aria-live="assertive" hidden>
       <p class="prompt-lead">Draw</p>
       <h2 class="prompt-word" id="prompt-word">a fish</h2>
       <p class="prompt-count" id="prompt-count">3</p>
-      <button class="text-btn" type="button" id="btn-recalibrate" hidden>Recalibrate first</button>
+      <p class="hint" id="prompt-rec-note" hidden>Recording starts with the timer.</p>
     </section>
 
-    <!-- 4. Drawing -->
+    <!-- The round -->
     <section class="screen screen-draw" id="screen-draw" aria-labelledby="draw-prompt" hidden>
       <div class="draw-head">
         <h2 id="draw-prompt">Draw a fish</h2>
-        <p class="timer" id="timer" role="timer" aria-label="Time left">60</p>
+        <p class="timer" id="timer" role="timer" aria-label="Time left">90</p>
       </div>
       <div class="draw-body">
         <aside class="draw-side">
-          <div class="preview" id="draw-video-slot"></div>
+          <div class="preview-wrap">
+            <div class="preview" id="draw-video-slot"></div>
+            <span class="rec-badge" id="rec-badge" hidden><span class="rec" aria-hidden="true"></span>Recording</span>
+          </div>
           <p class="face-status" id="face-status" aria-live="polite"></p>
           <div class="signals" id="signals" aria-hidden="true">
-            <span></span><span></span><span></span><span></span><span></span>
+            <span></span><span></span><span></span><span></span>
           </div>
-          <div class="found" id="found" role="img" aria-label="0 of 8 controls found"></div>
+          <div class="found" id="found" role="img" aria-label="0 of 7 controls found"></div>
           <div class="mouse-help" id="mouse-help" hidden>
-            <p>Hold the button to paint. Scroll or press + and − to resize. Hold S or F to change shape, Q or E to rotate. Press C for color and Space to stamp.</p>
+            <p>Hold the button to paint. Scroll or press + and − to resize. Hold S or F to change shape, Q or E to rotate. Press C for color.</p>
+          </div>
+          <div class="palette-block">
+            <p class="palette-current">Color: <b id="color-name">Red</b></p>
+            <div class="palette" id="palette" role="radiogroup" aria-label="Paint color"></div>
+            <p class="palette-hint" id="palette-hint">Blink slowly with both eyes to switch.</p>
           </div>
           <div class="tools">
             <button class="btn btn-small" type="button" id="btn-undo">Undo</button>
             <button class="btn btn-small" type="button" id="btn-clear">Clear</button>
             <button class="btn btn-small btn-primary" type="button" id="btn-finish">Finish</button>
           </div>
-          <label class="stamp-mode" id="stamp-mode-wrap">
-            <span>Stamp by</span>
-            <select id="stamp-mode">
-              <option value="blink">long blink</option>
-              <option value="dwell">holding still</option>
-            </select>
-          </label>
+          <button class="text-btn restart-btn" type="button" id="btn-restart-game">Restart game</button>
         </aside>
-        <div class="canvas-frame">
+        <div class="canvas-frame has-toast">
           <canvas id="paint-canvas" aria-label="Painting canvas"></canvas>
+          <p class="color-toast" id="color-toast" aria-live="polite"><span class="chip"></span><span class="name"></span></p>
         </div>
       </div>
     </section>
 
-    <!-- 5. Results -->
+    <!-- Results: synchronized replay -->
     <section class="screen screen-results" id="screen-results" aria-labelledby="result-prompt" hidden>
-      <div class="results-grid">
-        <div class="results-art">
+      <div class="results-head">
+        <div>
           <p class="kicker">You were asked to draw</p>
           <h2 class="big" id="result-prompt">a fish</h2>
-          <div class="canvas-frame"><canvas id="result-canvas" aria-label="Your finished painting"></canvas></div>
-          <p class="stats" id="result-stats"></p>
         </div>
-        <div class="results-side">
-          <div class="actions stack">
-            <button class="btn" type="button" id="btn-replay">Replay</button>
+        <fieldset class="modes" id="modes">
+          <legend class="visually-hidden">Replay view</legend>
+          <label><input type="radio" name="mode" value="side" checked /><span>Side by side</span></label>
+          <label><input type="radio" name="mode" value="face" /><span>Face only</span></label>
+          <label><input type="radio" name="mode" value="paint" /><span>Painting only</span></label>
+        </fieldset>
+      </div>
+      <div class="stage" id="stage" data-mode="side">
+        <div class="pane pane-face">
+          <video id="replay-video" playsinline muted></video>
+          <p class="pane-empty" id="video-empty" hidden></p>
+        </div>
+        <div class="pane pane-paint canvas-frame has-toast">
+          <canvas id="replay-canvas" aria-label="Painting replay"></canvas>
+          <p class="color-toast" id="replay-toast"><span class="chip"></span><span class="name"></span></p>
+        </div>
+      </div>
+      <div class="transport">
+        <button class="btn btn-small btn-primary" type="button" id="btn-playpause">Pause</button>
+        <button class="btn btn-small" type="button" id="btn-replay">Replay performance</button>
+        <input type="range" id="timeline" min="0" max="1000" step="10" value="0" aria-label="Replay position" />
+        <span class="time" id="time-label">0:00 / 0:00</span>
+        <span class="replay-palette" id="replay-palette" aria-label="Color active at this moment"></span>
+      </div>
+      <p class="hint replay-note" id="replay-note" hidden></p>
+      <div class="results-grid">
+        <div class="results-actions">
+          <p class="stats" id="result-stats"></p>
+          <div class="actions">
             <button class="btn" type="button" id="btn-save">Save image</button>
             <button class="btn" type="button" id="btn-explore">Explore your marks</button>
-            <button class="btn btn-primary" type="button" id="btn-again">Play again</button>
+            <button class="btn" type="button" id="btn-delete-rec" hidden>Delete recording</button>
+            <button class="btn btn-primary" type="button" id="btn-again">New Game</button>
           </div>
+          <div class="controls-found">
+            <h3 id="controls-title">What your face was doing</h3>
+            <ul id="controls-list"></ul>
+            <button class="text-btn" type="button" id="btn-reveal">Show the rules you didn't find</button>
+          </div>
+        </div>
+        <div class="results-reflect">
           <blockquote class="reflection" id="reflection">
             <p>You learned how to make yourself legible to the machine. But did it ever understand what you were trying to draw?</p>
           </blockquote>
@@ -141,16 +253,11 @@
             <summary>What was actually happening</summary>
             <p>The system measured visible facial movements and translated them into predefined marks. It could recognize signals, but it could not understand your intention.</p>
           </details>
-          <div class="controls-found">
-            <h3 id="controls-title">What your face was doing</h3>
-            <ul id="controls-list"></ul>
-            <button class="text-btn" type="button" id="btn-reveal">Show the rules you didn't find</button>
-          </div>
         </div>
       </div>
     </section>
 
-    <!-- 6. Mark editor -->
+    <!-- Mark editor -->
     <section class="screen screen-editor" id="screen-editor" aria-labelledby="editor-title" hidden>
       <div class="editor-head">
         <h2 id="editor-title">Your marks</h2>
@@ -183,7 +290,16 @@
     </section>
   </main>
 
-  <!-- The single video element. It moves between screens and is never recorded or drawn to storage. -->
+  <dialog class="dialog" id="confirm-dialog" aria-labelledby="confirm-title">
+    <h2 id="confirm-title">Discard your face replay?</h2>
+    <p id="confirm-text"></p>
+    <div class="actions">
+      <button class="btn btn-primary" type="button" id="btn-confirm-yes">Discard and start</button>
+      <button class="btn" type="button" id="btn-confirm-no">Keep watching</button>
+    </div>
+  </dialog>
+
+  <!-- The single live-camera video element. It moves between screens; its frames are never stored. -->
   <div class="video-holder" id="video-holder" hidden>
     <div class="video-wrap" id="video-wrap">
       <video id="video" playsinline muted></video>

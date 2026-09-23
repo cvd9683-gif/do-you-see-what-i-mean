@@ -5,31 +5,52 @@
 export const CANVAS_W = 1200;
 export const CANVAS_H = 800;
 
-export const ROUND_MS = 60_000;
+export const ROUND_MS = 90_000;
 
-// A bold, limited pigment set. Order matters: raising your brows cycles through it.
-export const PALETTE = ['#E8321E', '#2340D8', '#FFB400', '#141414', '#138A5B', '#FF8FB8'];
+// Players see only concrete, beginner prompts until they have finished this many rounds.
+export const BEGINNER_ROUNDS = 3;
+
+// Five high-contrast pigments. Order matters: a deliberate blink cycles through them.
+export const PALETTE = ['#E8321E', '#2340D8', '#FFB400', '#138A5B', '#141414'];
+export const COLOR_NAMES = { '#E8321E': 'Red', '#2340D8': 'Blue', '#FFB400': 'Yellow', '#138A5B': 'Green', '#141414': 'Black', '#FF8FB8': 'Pink' };
 
 export const SHAPES = ['line', 'rounded', 'angular'];
 
-// The hidden rules. Only revealed (one by one) after a player triggers them.
+// The rules. Named on the results screen once a player has triggered them.
 export const CONTROLS = [
-  { id: 'moveX', label: 'Turn your head left or right to move sideways.' },
-  { id: 'moveY', label: 'Tip your head up or down to move vertically.' },
-  { id: 'paint', label: 'Open your mouth to paint. Wider makes bigger marks.' },
-  { id: 'rounded', label: 'Smile to make rounded marks.' },
-  { id: 'angular', label: 'Lower or furrow your brows for sharp, angular marks.' },
-  { id: 'rotate', label: 'Tilt your head to rotate a mark.' },
-  { id: 'stamp', label: 'Hold a long blink to stamp a bold mark.' },
-  { id: 'color', label: 'Raise your eyebrows to switch color.' },
+  { id: 'moveX', label: 'Turn your head to move the cursor sideways.' },
+  { id: 'moveY', label: 'Tip your head up or down to move it vertically.' },
+  { id: 'paint', label: 'Open your mouth to paint. Close it to move without painting.' },
+  { id: 'rounded', label: 'Smile while painting for rounded marks.' },
+  { id: 'angular', label: 'Move your eyebrows (raise or frown) for sharp, angular marks.' },
+  { id: 'rotate', label: 'Tilt your head to rotate the mark.' },
+  { id: 'color', label: 'Blink deliberately (or raise your eyebrows, if blinks weren’t readable) to switch color.' },
 ];
 
+// Written into every session so a saved painting records which rules produced it.
+// `colorChange` and `browMovement` depend on whether calibration found blinks reliable.
+export function mappingsFor(colorInput) {
+  return {
+    headX: 'cursor x (calibrated range → full canvas width)',
+    headY: 'cursor y (calibrated range → full canvas height)',
+    mouthOpen: 'paint while open (after a short hold); openness sets brush size',
+    smile: 'rounded marks',
+    browMovement: colorInput === 'browRaise' ? 'furrow → angular marks' : 'angular marks (raise or furrow)',
+    headTilt: 'mark rotation',
+    colorChange:
+      colorInput === 'blink'
+        ? 'deliberate blink (both eyes, held) → next color; palette click as fallback'
+        : 'eyebrow raise (held) → next color, because blinks were not reliable; palette click as fallback',
+  };
+}
+
 export const DEFAULT_SETTINGS = {
-  roundMs: ROUND_MS,
-  // 'blink' = long blink stamps; 'dwell' = holding still stamps. Space bar always stamps.
-  stampMode: 'blink',
-  blinkHoldMs: 280,
-  dwellMs: 1200,
-  paintStartMs: 120,
+  paintStartMs: 150, // mouth must stay open this long before paint flows
+  blinkHoldMs: 200, // a natural blink is ~100–150 ms; a deliberate one is longer
+  blinkRearmMs: 400, // eyes must be open this long before another blink counts
+  colorCooldownMs: 900, // one blink can never trigger several changes
+  browRaiseHoldMs: 250, // fallback gesture when blinks aren't reliable
+  deadZone: 0.05, // fraction of each head half-range treated as "centre"
+  reach: 0.8, // 80% of the calibrated comfortable turn reaches the canvas edge
   mirror: true,
 };

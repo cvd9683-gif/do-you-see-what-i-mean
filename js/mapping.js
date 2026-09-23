@@ -1,13 +1,14 @@
 // Gesture → brush. The model reports numbers; this module decides what those numbers paint.
-// Nothing here "understands" a face: it just thresholds and scales measurements.
+// Nothing here "understands" a face: it just thresholds and scales measurements,
+// relative to the player's own calibration.
 
 import { CANVAS_W, CANVAS_H, PALETTE, DEFAULT_SETTINGS } from './config.js';
-import { DEFAULT_CALIBRATION } from './calibration.js';
+import { DEFAULT_CALIBRATION, smileOf, browDownOf, blinkOf } from './calibration.js';
 
 export const clamp = (v, lo = 0, hi = 1) => Math.min(hi, Math.max(lo, v));
 
 // 1€ filter (Casiez et al.): heavy smoothing when the head is still (kills jitter),
-// light smoothing when it moves fast (keeps the brush responsive).
+// light smoothing when it moves fast (keeps the cursor responsive).
 export class OneEuro {
   constructor({ minCutoff = 0.3, beta = 0.002, dCutoff = 1.0 } = {}) {
     Object.assign(this, { minCutoff, beta, dCutoff });
@@ -38,31 +39,39 @@ export class OneEuro {
   }
 }
 
-// Map a head measurement to 0..1 using the calibrated range on each side of neutral.
-// `reach` < 1 means you only need ~75% of your calibrated turn to hit the edge.
-export function mapAxis(v, neg, neutral, pos, reach = 0.75) {
-  if ((v - neutral) * (neg - neutral) > 0) {
-    return 0.5 - 0.5 * clamp((v - neutral) / ((neg - neutral) * reach));
-  }
-  return 0.5 + 0.5 * clamp((v - neutral) / ((pos - neutral) * reach));
+// Map a head measurement to 0..1 across the canvas.
+// Each side of neutral is scaled separately to the player's calibrated comfortable extreme;
+// `reach` < 1 means you only need that fraction of it to hit the edge. A small dead zone
+// around neutral keeps the cursor calm when the head is "centred".
+export function mapAxis(v, neg, neutral, pos, reach = DEFAULT_SETTINGS.reach, dead = DEFAULT_SETTINGS.deadZone) {
+  let o;
+  if ((v - neutral) * (neg - neutral) > 0) o = -clamp((v - neutral) / ((neg - neutral) * reach));
+  else o = clamp((v - neutral) / ((pos - neutral) * reach));
+  const a = Math.abs(o);
+  const shaped = a <= dead ? 0 : (a - dead) / (1 - dead);
+  return 0.5 + 0.5 * Math.sign(o) * shaped;
 }
 
-// 0 at rest, 1 at ~80% of the calibrated maximum.
-export const normalize = (v, { rest, max }, reach = 0.8) => clamp((v - rest) / Math.max(0.05, (max - rest) * reach));
+// 0 at rest, 1 at the calibrated comfortable maximum.
+export const normalize = (v, { rest, max }) => clamp((v - rest) / Math.max(0.05, max - rest));
 
 // Output only moves once the target is more than `d` px away, then trails it by `d`.
-export const deadband = (prev, next, d = 4) => (Math.abs(next - prev) <= d ? prev : next - Math.sign(next - prev) * d);
+export const deadband = (prev, next, d = 3) => (Math.abs(next - prev) <= d ? prev : next - Math.sign(next - prev) * d);
 
 const round3 = (v) => Math.round(v * 1000) / 1000;
 
+// Paint gate thresholds on the normalized mouth signal (with hysteresis).
+export const PAINT_ON = 0.35;
+export const PAINT_OFF = 0.2;
+
 export function pickShape(smile, brow) {
-  if (smile > 0.42 && smile >= brow) return 'rounded';
-  if (brow > 0.42) return 'angular';
+  if (smile > 0.5 && smile >= brow) return 'rounded';
+  if (brow > 0.5) return 'angular';
   return 'line';
 }
 
 export function sizeFromMouth(m) {
-  return 12 + Math.pow(m, 1.15) * 108;
+  return 16 + Math.pow(clamp((m - PAINT_OFF) / (1 - PAINT_OFF)), 1.1) * 96;
 }
 
 export class BrushMapper {
@@ -76,12 +85,13 @@ export class BrushMapper {
     this.colorIndex = 0;
     this.events = [];
     this.sig = { mouth: 0, smile: 0, brow: 0, browUp: 0, blink: 0, tilt: 0 };
+    // Which face gesture changes color: a deliberate blink if calibration found blinks reliable,
+    // otherwise a held eyebrow raise (and then only a furrow makes angular marks, so they don't clash).
+    this.colorInput = calibration.blink?.reliable ? 'blink' : 'browRaise';
     this._mouthOpenSince = null;
-    this._blinkSince = null;
-    this._blinkFired = false;
-    this._browUpArmed = true;
+    this._blink = { closedSince: null, openSince: null, fired: false, armed: true };
+    this._raise = { since: null, lowSince: null, fired: false, armed: true };
     this._lastColorAt = -Infinity;
-    this._dwell = { x: 0, y: 0, since: null, fired: false };
     this.facialInput = null;
     this.state = {
       present: false,
@@ -93,17 +103,14 @@ export class BrushMapper {
       color: PALETTE[0],
       opacity: 0.7,
       painting: false,
-      holdProgress: 0,
+      charging: 0, // 0..1 while the mouth is open but paint hasn't started yet
+      holdProgress: 0, // 0..1 while a deliberate blink is being held
       signals: this.sig,
     };
   }
 
-  get stampMode() {
-    return this.settings.stampMode === 'dwell' || !this.cal.blink?.reliable ? 'dwell' : 'blink';
-  }
-
-  setStampMode(mode) {
-    this.settings.stampMode = mode;
+  get blinkEnabled() {
+    return this.colorInput === 'blink';
   }
 
   // Called for every tracked video frame (~30/s). f.t is in milliseconds.
@@ -112,125 +119,170 @@ export class BrushMapper {
     if (!f.present) {
       st.present = false;
       st.painting = false;
+      st.charging = 0;
       st.holdProgress = 0;
       this._mouthOpenSince = null;
-      this._blinkSince = null;
+      this._blink.closedSince = null;
       return st;
     }
     st.present = true;
     const c = this.cal;
+    const n = c.neutral;
     const t = f.t / 1000;
 
-    // Position: calibrated head pose → canvas, then 1€ smoothing in canvas pixels.
-    const nx = mapAxis(f.headX, c.headX.neg, c.neutral.headX, c.headX.pos);
-    const ny = mapAxis(f.headY, c.headY.neg, c.neutral.headY, c.headY.pos);
-    // A small dead-band on top absorbs the residual tremble of a head that is "holding still".
+    // Position: calibrated head pose → full canvas, then 1€ smoothing and a tiny dead-band.
+    const nx = mapAxis(f.headX, c.headX.neg, n.headX, c.headX.pos, this.settings.reach, this.settings.deadZone);
+    const ny = mapAxis(f.headY, c.headY.neg, n.headY, c.headY.pos, this.settings.reach, this.settings.deadZone);
     st.x = deadband(st.x, clamp(this.fx.filter(nx * this.w, t), 0, this.w));
     st.y = deadband(st.y, clamp(this.fy.filter(ny * this.h, t), 0, this.h));
 
     // Expressions: normalize per player, then an exponential moving average.
-    const ema = (prev, next, a = 0.35) => prev + a * (next - prev);
+    const ema = (prev, next, a = 0.4) => prev + a * (next - prev);
     const s = this.sig;
+    const furrow = normalize(browDownOf(f), c.brow.down);
+    const raise = normalize(f.browUp, c.brow.up);
+    const browRaw = this.colorInput === 'browRaise' ? furrow : Math.max(furrow, raise);
+    s.browUp = ema(s.browUp, raise);
     s.mouth = ema(s.mouth, normalize(f.mouthOpen, c.mouthOpen));
-    s.smile = ema(s.smile, normalize((f.smileL + f.smileR) / 2, c.smile));
-    s.brow = ema(s.brow, normalize((f.browDownL + f.browDownR) / 2, c.browDown));
-    s.browUp = ema(s.browUp, normalize(f.browUp, c.browUp));
-    s.blink = Math.min(f.blinkL, f.blinkR);
-    s.tilt = ema(s.tilt, clamp(f.tilt - c.neutral.tilt, -45, 45), 0.3);
+    s.smile = ema(s.smile, normalize(smileOf(f), c.smile));
+    s.brow = ema(s.brow, browRaw);
+    s.blink = clamp((blinkOf(f) - c.blink.rest) / Math.max(0.05, c.blink.threshold - c.blink.rest));
+    s.tilt = ema(s.tilt, clamp(f.tilt - n.tilt, -45, 45), 0.3);
 
     st.shape = pickShape(s.smile, s.brow);
     st.size = sizeFromMouth(s.mouth);
     st.rotation = clamp(s.tilt * 1.6, -90, 90);
-    st.opacity = clamp(0.78 - st.size / 420, 0.45, 0.78);
+    st.opacity = clamp(0.8 - st.size / 420, 0.5, 0.8);
     st.color = PALETTE[this.colorIndex];
 
-    // Painting only starts after the mouth has been open for a beat (ignores talking blips),
-    // and has hysteresis so it doesn't flicker on and off near the threshold.
-    const openNow = st.painting ? s.mouth > 0.1 : s.mouth > 0.18;
+    // Paint only after the mouth has been open for a beat (ignores talking and yawning blips),
+    // with hysteresis so it doesn't flicker near the threshold. Closed mouth = move freely.
+    const openNow = st.painting ? s.mouth > PAINT_OFF : s.mouth > PAINT_ON;
     if (openNow) {
       this._mouthOpenSince ??= f.t;
-      st.painting = f.t - this._mouthOpenSince >= this.settings.paintStartMs;
+      const held = f.t - this._mouthOpenSince;
+      st.painting = held >= this.settings.paintStartMs;
+      st.charging = st.painting ? 0 : clamp(held / this.settings.paintStartMs);
     } else {
       this._mouthOpenSince = null;
       st.painting = false;
-    }
-
-    // Color: rising edge of a brow raise, with a cooldown.
-    if (s.browUp > 0.65 && this._browUpArmed && f.t - this._lastColorAt > 900) {
-      this._browUpArmed = false;
-      this._lastColorAt = f.t;
-      this.nextColor();
-      this.events.push({ type: 'color' });
-    } else if (s.browUp < 0.35) {
-      this._browUpArmed = true;
+      st.charging = 0;
     }
 
     st.holdProgress = 0;
-    if (this.stampMode === 'blink') this._updateBlink(f);
-    else this._updateDwell(f);
+    if (this.colorInput === 'blink') this._updateBlink(f);
+    else this._updateBrowRaise(f);
 
     this.facialInput = {
       mouthOpen: round3(f.mouthOpen),
-      smileLeft: round3(f.smileL),
-      smileRight: round3(f.smileR),
-      browDown: round3((f.browDownL + f.browDownR) / 2),
-      browUp: round3(f.browUp),
-      blinkLeft: round3(f.blinkL),
-      blinkRight: round3(f.blinkR),
+      smile: round3(smileOf(f)),
+      browMovement: round3(Math.max(browDownOf(f), f.browUp)),
+      blink: round3(blinkOf(f)),
       headX: round3(nx),
       headY: round3(ny),
-      headTilt: Math.round(f.tilt - c.neutral.tilt),
+      headTilt: Math.round(f.tilt - n.tilt),
     };
     return st;
   }
 
-  // A normal blink lasts ~100–150 ms. Only a held blink (both eyes) counts as a stamp.
+  // A deliberate blink changes color. Protected against repeats four ways: both eyes must close
+  // past a strong, personally calibrated threshold; the blink must be held longer than a natural
+  // one; the eyes must reopen for a while before the next one counts; and there is a cooldown.
   _updateBlink(f) {
-    const closed = Math.min(f.blinkL, f.blinkR) > this.cal.blink.threshold;
+    const b = this._blink;
+    const cfg = this.settings;
+    const closed = blinkOf(f) > this.cal.blink.threshold;
     if (closed) {
-      this._blinkSince ??= f.t;
-      const held = f.t - this._blinkSince;
-      this.state.holdProgress = clamp(held / this.settings.blinkHoldMs);
-      if (held >= this.settings.blinkHoldMs && !this._blinkFired) {
-        this._blinkFired = true;
-        this.events.push({ type: 'stamp', via: 'blink' });
+      b.openSince = null;
+      b.closedSince ??= f.t;
+      const held = f.t - b.closedSince;
+      if (b.armed && !b.fired) this.state.holdProgress = clamp(held / cfg.blinkHoldMs);
+      if (held >= cfg.blinkHoldMs && b.armed && !b.fired && f.t - this._lastColorAt >= cfg.colorCooldownMs) {
+        b.fired = true;
+        b.armed = false;
+        this._lastColorAt = f.t;
+        this.nextColor('blink');
       }
     } else {
-      this._blinkSince = null;
-      this._blinkFired = false;
+      b.closedSince = null;
+      b.fired = false;
+      b.openSince ??= f.t;
+      if (f.t - b.openSince >= cfg.blinkRearmMs) b.armed = true;
     }
   }
 
-  // Fallback when blinks can't be told apart: hold the brush still (mouth closed) to stamp.
-  _updateDwell(f) {
-    const d = this._dwell;
-    const st = this.state;
-    const moved = Math.hypot(st.x - d.x, st.y - d.y);
-    if (st.painting || moved > 22) {
-      d.x = st.x;
-      d.y = st.y;
-      d.since = f.t;
-      d.fired = false; // moving away re-arms the next dwell stamp
-      return;
-    }
-    d.since ??= f.t;
-    if (d.fired) return;
-    const held = f.t - d.since;
-    st.holdProgress = clamp(held / this.settings.dwellMs);
-    if (held >= this.settings.dwellMs) {
-      d.fired = true;
-      this.events.push({ type: 'stamp', via: 'dwell' });
+  // Fallback when blinks can't be told apart: a held, strong eyebrow raise.
+  _updateBrowRaise(f) {
+    const r = this._raise;
+    const cfg = this.settings;
+    const up = this.sig.browUp;
+    if (up > 0.7) {
+      r.lowSince = null;
+      r.since ??= f.t;
+      const held = f.t - r.since;
+      if (r.armed && !r.fired) this.state.holdProgress = clamp(held / cfg.browRaiseHoldMs);
+      if (held >= cfg.browRaiseHoldMs && r.armed && !r.fired && f.t - this._lastColorAt >= cfg.colorCooldownMs) {
+        r.fired = true;
+        r.armed = false;
+        this._lastColorAt = f.t;
+        this.nextColor('browRaise');
+      }
+    } else {
+      r.since = null;
+      r.fired = false;
+      if (up < 0.3) {
+        r.lowSince ??= f.t;
+        if (f.t - r.lowSince >= cfg.blinkRearmMs) r.armed = true;
+      }
     }
   }
 
-  nextColor() {
-    this.colorIndex = (this.colorIndex + 1) % PALETTE.length;
-    this.state.color = PALETTE[this.colorIndex];
+  // Every color change (face, click or key) goes through here and is emitted as an event,
+  // so the game can record it with a timestamp.
+  setColor(index, via) {
+    if (index === this.colorIndex || index < 0 || index >= PALETTE.length) return;
+    const previousColor = PALETTE[this.colorIndex];
+    this.colorIndex = index;
+    this.state.color = PALETTE[index];
+    this.events.push({ type: 'color', via, previousColor, newColor: PALETTE[index] });
+  }
+
+  nextColor(via = 'key') {
+    this.setColor((this.colorIndex + 1) % PALETTE.length, via);
   }
 
   drainEvents() {
     const e = this.events;
     this.events = [];
     return e;
+  }
+}
+
+// Turns a continuous "mouth open" into discrete, evenly spaced marks (dabs).
+// Shared by the practice canvas and the real round so both paint identically.
+export class DabTrail {
+  constructor() {
+    this.strokeId = null;
+    this.last = null;
+    this.lastAt = 0;
+  }
+  // Returns the strokeId to use if a dab should be laid now, otherwise null.
+  step(brush, now, makeId) {
+    if (!(brush.present && brush.painting)) {
+      this.strokeId = null;
+      return null;
+    }
+    if (!this.strokeId) {
+      this.strokeId = makeId();
+      this.last = null;
+    }
+    const spacing = Math.max(5, brush.size * 0.28);
+    const far = !this.last || Math.hypot(brush.x - this.last.x, brush.y - this.last.y) >= spacing;
+    if (far || now - this.lastAt > 260) {
+      this.last = { x: brush.x, y: brush.y };
+      this.lastAt = now;
+      return this.strokeId;
+    }
+    return null;
   }
 }

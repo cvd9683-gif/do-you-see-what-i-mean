@@ -242,16 +242,17 @@ export class Painter {
     return c;
   }
 
-  // Ghost of the mark you're about to make: its shape, size, rotation and color.
+  // The cursor: always a high-contrast ring (so you can find it), plus a ghost of the mark
+  // you'd make — dashed while moving, solid in color while painting.
   drawCursor(brush) {
     const c = this.ctx;
-    const { x, y, size, rotation, shape, color, painting, holdProgress, present } = brush;
+    const { x, y, size, rotation, shape, color, painting, charging = 0, holdProgress = 0, present } = brush;
     if (!present) return;
+    const R = size / 2;
     c.save();
     c.translate(x, y);
     c.rotate((rotation * Math.PI) / 180);
-    const R = size / 2;
-    c.strokeStyle = painting ? color : 'rgba(20,20,20,0.75)';
+    c.strokeStyle = painting ? color : 'rgba(20,20,20,0.55)';
     c.lineWidth = painting ? 2.5 : 1.5;
     c.setLineDash(painting ? [] : [5, 5]);
     c.beginPath();
@@ -266,23 +267,39 @@ export class Painter {
       c.lineTo(size * 0.8, 0);
     }
     c.stroke();
-    c.setLineDash([]);
     c.restore();
+
+    // Locator ring: light halo under a dark ring reads on any paint color.
+    c.save();
+    c.lineWidth = 7;
+    c.strokeStyle = 'rgba(245,240,230,0.9)';
+    c.beginPath();
+    c.arc(x, y, 13, 0, Math.PI * 2);
+    c.stroke();
+    c.lineWidth = 3;
+    c.strokeStyle = '#141414';
+    c.stroke();
     c.fillStyle = color;
     c.beginPath();
-    c.arc(x, y, 5, 0, Math.PI * 2);
+    c.arc(x, y, painting ? 8 : 5, 0, Math.PI * 2);
     c.fill();
-    c.strokeStyle = '#141414';
-    c.lineWidth = 1.5;
-    c.stroke();
+    if (charging > 0) {
+      // Mouth is open: paint is about to start.
+      c.strokeStyle = color;
+      c.lineWidth = 4;
+      c.beginPath();
+      c.arc(x, y, 20, -Math.PI / 2, -Math.PI / 2 + charging * Math.PI * 2);
+      c.stroke();
+    }
     if (holdProgress > 0) {
-      // Fills up while a stamp gesture (long blink or dwell) is being held.
+      // A deliberate blink is being held (color change).
       c.strokeStyle = '#141414';
       c.lineWidth = 3;
       c.beginPath();
-      c.arc(x, y, Math.max(R, 14) + 10, -Math.PI / 2, -Math.PI / 2 + holdProgress * Math.PI * 2);
+      c.arc(x, y, 27, -Math.PI / 2, -Math.PI / 2 + holdProgress * Math.PI * 2);
       c.stroke();
     }
+    c.restore();
   }
 
   drawSelection(mark) {

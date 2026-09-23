@@ -1,10 +1,12 @@
 [
-  { "id": "flower", "label": "a flower" },
-  { "id": "fish", "label": "a fish" },
-  { "id": "sunset", "label": "a sunset" },
-  { "id": "house", "label": "a house" },
-  { "id": "storm", "label": "a storm" },
-  { "id": "tree", "label": "a tree" },
-  { "id": "face", "label": "a face" },
-  { "id": "rocket", "label": "a rocket" }
+  { "id": "sun", "label": "a sun", "level": "beginner" },
+  { "id": "flower", "label": "a flower", "level": "beginner" },
+  { "id": "balloon", "label": "a balloon", "level": "beginner" },
+  { "id": "fish", "label": "a fish", "level": "beginner" },
+  { "id": "face", "label": "a face", "level": "beginner" },
+  { "id": "house", "label": "a house", "level": "beginner" },
+  { "id": "storm", "label": "a storm", "level": "open" },
+  { "id": "sunset", "label": "a sunset", "level": "open" },
+  { "id": "tree", "label": "a tree", "level": "open" },
+  { "id": "rocket", "label": "a rocket", "level": "open" }
 ]

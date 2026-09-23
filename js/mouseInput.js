@@ -57,10 +57,7 @@ export class MouseInput {
     on(window, 'keydown', (e) => {
       if (e.target.closest?.('input, textarea, select')) return;
       const k = e.key.toLowerCase();
-      if (k === 'c' && !e.repeat) {
-        this.colorIndex = (this.colorIndex + 1) % PALETTE.length;
-        this.events.push({ type: 'color' });
-      }
+      if (k === 'c' && !e.repeat) this.nextColor('key');
       if (k === '=' || k === '+') this.baseSize = clamp(this.baseSize + 6, 10, 130);
       if (k === '-') this.baseSize = clamp(this.baseSize - 6, 10, 130);
       this.keys.add(k);
@@ -86,6 +83,18 @@ export class MouseInput {
     s.color = PALETTE[this.colorIndex];
     s.opacity = clamp(0.78 - s.size / 420, 0.45, 0.78);
     return s;
+  }
+
+  setColor(index, via) {
+    if (index === this.colorIndex || index < 0 || index >= PALETTE.length) return;
+    const previousColor = PALETTE[this.colorIndex];
+    this.colorIndex = index;
+    this.state.color = PALETTE[index];
+    this.events.push({ type: 'color', via, previousColor, newColor: PALETTE[index] });
+  }
+
+  nextColor(via = 'key') {
+    this.setColor((this.colorIndex + 1) % PALETTE.length, via);
   }
 
   drainEvents() {
