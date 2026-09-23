@@ -4,6 +4,9 @@
 
 You get a simple prompt (“Draw a fish”) and 90 seconds. There is no brush and no mouse. Your webcam watches your head and face, and those movements steer a painting tool. Afterwards you can watch your face and your painting replay side by side, in sync.
 
+**#Try it out!**
+https://cvd9683-gif.github.io/do-you-see-what-i-mean/ 
+
 ## Concept
 
 The game is about the gap between *machine recognition* and *human understanding*.
