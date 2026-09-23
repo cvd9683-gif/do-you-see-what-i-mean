@@ -1,0 +1,12 @@
+{
+  "name": "do-you-see-what-i-mean",
+  "version": "1.0.0",
+  "description": "Do You See What I Mean? Pictionary, except you paint with your face.",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "python3 -m http.server 8000",
+    "test": "node --test tests/*.test.mjs"
+  },
+  "license": "MIT"
+}

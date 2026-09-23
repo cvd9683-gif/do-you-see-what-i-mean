@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Do You See What I Mean?</title>
+  <meta name="description" content="Pictionary, except you paint with your face." />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='13' cy='16' r='11' fill='%23E8321E' fill-opacity='.85'/%3E%3Cpath d='M30 16 16 6v20z' fill='%232340D8' fill-opacity='.8'/%3E%3C/svg%3E" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+
+  <header class="topbar">
+    <button class="wordmark" type="button" data-action="home" hidden>Do You See What I Mean?</button>
+    <div class="camera-pill" id="camera-pill" role="status" hidden>
+      <span class="rec" aria-hidden="true"></span>
+      <span>Camera on</span>
+      <button type="button" data-action="quit">Turn off and exit</button>
+    </div>
+  </header>
+
+  <main id="main">
+    <!-- 1. Landing -->
+    <section class="screen screen-landing" id="screen-landing" aria-labelledby="title">
+      <canvas class="hero-paint" id="hero-canvas" aria-hidden="true"></canvas>
+      <div class="landing-copy">
+        <h1 class="title" id="title"><span>Do you</span> <span>see what</span> <span>I mean?</span></h1>
+        <p class="subtitle">Draw the prompt using only your face.</p>
+        <div class="actions">
+          <button class="btn btn-primary" type="button" id="btn-start">Start</button>
+          <button class="btn" type="button" id="btn-continue" hidden>Continue</button>
+        </div>
+        <p class="note">Your webcam is analyzed on this device. No camera images are saved or sent anywhere.</p>
+      </div>
+      <div class="gallery" id="gallery" hidden>
+        <h2>Your paintings</h2>
+        <ul id="gallery-list"></ul>
+      </div>
+      <button class="text-btn reset" type="button" id="btn-reset">Reset saved data</button>
+    </section>
+
+    <!-- 2a. Why we need the camera -->
+    <section class="screen screen-consent" id="screen-consent" aria-labelledby="consent-title" hidden>
+      <h2 class="big" id="consent-title">Your face is the brush.</h2>
+      <p class="lede">To paint, the game needs to watch how your head and face move. Your browser will ask to use the camera next.</p>
+      <ul class="facts">
+        <li>Each video frame is analyzed by a face-tracking model inside this browser tab, then discarded.</li>
+        <li>No images of you are stored or uploaded. Only numbers, like how open your mouth is, are kept with your painting.</li>
+        <li>The camera turns off when the round ends, or whenever you choose “Turn off and exit”.</li>
+      </ul>
+      <div class="actions">
+        <button class="btn btn-primary" type="button" id="btn-camera">Turn on camera</button>
+        <button class="btn" type="button" id="btn-mouse">Use a mouse instead</button>
+        <button class="text-btn" type="button" data-action="home">Back</button>
+      </div>
+      <p class="error" id="consent-error" role="alert"></p>
+    </section>
+
+    <!-- 2b. Calibration -->
+    <section class="screen screen-calibrate" id="screen-calibrate" aria-labelledby="calib-instruction" hidden>
+      <div class="calib-video" id="calib-video-slot"></div>
+      <div class="calib-side">
+        <p class="calib-count" id="calib-count">Getting ready</p>
+        <h2 class="big" id="calib-instruction" aria-live="polite">Loading the face model…</h2>
+        <div class="bar" aria-hidden="true"><span id="calib-bar"></span></div>
+        <p class="hint" id="calib-hint">This takes about twenty seconds. Nothing you do here is painted.</p>
+        <div class="actions">
+          <button class="btn" type="button" id="btn-calib-mouse">Use a mouse instead</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- 3. Prompt reveal -->
+    <section class="screen screen-prompt" id="screen-prompt" aria-live="assertive" hidden>
+      <p class="prompt-lead">Draw</p>
+      <h2 class="prompt-word" id="prompt-word">a fish</h2>
+      <p class="prompt-count" id="prompt-count">3</p>
+      <button class="text-btn" type="button" id="btn-recalibrate" hidden>Recalibrate first</button>
+    </section>
+
+    <!-- 4. Drawing -->
+    <section class="screen screen-draw" id="screen-draw" aria-labelledby="draw-prompt" hidden>
+      <div class="draw-head">
+        <h2 id="draw-prompt">Draw a fish</h2>
+        <p class="timer" id="timer" role="timer" aria-label="Time left">60</p>
+      </div>
+      <div class="draw-body">
+        <aside class="draw-side">
+          <div class="preview" id="draw-video-slot"></div>
+          <p class="face-status" id="face-status" aria-live="polite"></p>
+          <div class="signals" id="signals" aria-hidden="true">
+            <span></span><span></span><span></span><span></span><span></span>
+          </div>
+          <div class="found" id="found" role="img" aria-label="0 of 8 controls found"></div>
+          <div class="mouse-help" id="mouse-help" hidden>
+            <p>Hold the button to paint. Scroll or press + and − to resize. Hold S or F to change shape, Q or E to rotate. Press C for color and Space to stamp.</p>
+          </div>
+          <div class="tools">
+            <button class="btn btn-small" type="button" id="btn-undo">Undo</button>
+            <button class="btn btn-small" type="button" id="btn-clear">Clear</button>
+            <button class="btn btn-small btn-primary" type="button" id="btn-finish">Finish</button>
+          </div>
+          <label class="stamp-mode" id="stamp-mode-wrap">
+            <span>Stamp by</span>
+            <select id="stamp-mode">
+              <option value="blink">long blink</option>
+              <option value="dwell">holding still</option>
+            </select>
+          </label>
+        </aside>
+        <div class="canvas-frame">
+          <canvas id="paint-canvas" aria-label="Painting canvas"></canvas>
+        </div>
+      </div>
+    </section>
+
+    <!-- 5. Results -->
+    <section class="screen screen-results" id="screen-results" aria-labelledby="result-prompt" hidden>
+      <div class="results-grid">
+        <div class="results-art">
+          <p class="kicker">You were asked to draw</p>
+          <h2 class="big" id="result-prompt">a fish</h2>
+          <div class="canvas-frame"><canvas id="result-canvas" aria-label="Your finished painting"></canvas></div>
+          <p class="stats" id="result-stats"></p>
+        </div>
+        <div class="results-side">
+          <div class="actions stack">
+            <button class="btn" type="button" id="btn-replay">Replay</button>
+            <button class="btn" type="button" id="btn-save">Save image</button>
+            <button class="btn" type="button" id="btn-explore">Explore your marks</button>
+            <button class="btn btn-primary" type="button" id="btn-again">Play again</button>
+          </div>
+          <blockquote class="reflection" id="reflection">
+            <p>You learned how to make yourself legible to the machine. But did it ever understand what you were trying to draw?</p>
+          </blockquote>
+          <details class="explain">
+            <summary>What was actually happening</summary>
+            <p>The system measured visible facial movements and translated them into predefined marks. It could recognize signals, but it could not understand your intention.</p>
+          </details>
+          <div class="controls-found">
+            <h3 id="controls-title">What your face was doing</h3>
+            <ul id="controls-list"></ul>
+            <button class="text-btn" type="button" id="btn-reveal">Show the rules you didn't find</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 6. Mark editor -->
+    <section class="screen screen-editor" id="screen-editor" aria-labelledby="editor-title" hidden>
+      <div class="editor-head">
+        <h2 id="editor-title">Your marks</h2>
+        <div class="actions">
+          <button class="btn btn-small" type="button" id="btn-download-json">Download JSON</button>
+          <button class="btn btn-small" type="button" id="btn-editor-done">Back to results</button>
+        </div>
+      </div>
+      <div class="editor-body">
+        <div class="canvas-frame"><canvas id="editor-canvas" tabindex="0" aria-label="Mark editor. Click a mark to select it. Use [ and ] to step through marks, arrow keys to move, Delete to remove."></canvas></div>
+        <aside class="editor-panel" id="editor-panel">
+          <p class="hint" id="editor-empty">Click any mark to pick it up. Press [ or ] to step through marks with the keyboard.</p>
+          <div id="editor-controls" hidden>
+            <fieldset class="swatches" id="swatches">
+              <legend>Color</legend>
+            </fieldset>
+            <label class="range">
+              <span>Size</span>
+              <input type="range" id="mark-size" min="6" max="260" step="1" />
+            </label>
+            <div class="actions">
+              <button class="btn btn-small" type="button" id="btn-mark-play">Replay mark</button>
+              <button class="btn btn-small btn-danger" type="button" id="btn-mark-delete">Delete</button>
+            </div>
+            <p class="kicker">What the machine measured</p>
+            <pre class="json" id="mark-json"></pre>
+          </div>
+        </aside>
+      </div>
+    </section>
+  </main>
+
+  <!-- The single video element. It moves between screens and is never recorded or drawn to storage. -->
+  <div class="video-holder" id="video-holder" hidden>
+    <div class="video-wrap" id="video-wrap">
+      <video id="video" playsinline muted></video>
+      <canvas id="face-overlay"></canvas>
+    </div>
+  </div>
+
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
