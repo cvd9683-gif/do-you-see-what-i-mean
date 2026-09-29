@@ -133,9 +133,17 @@ export function extractFeatures(result, vw, vh, t) {
 
   const faceW = Math.hypot(mx(cL) - mx(cR), my(cL) - my(cR)) || 1;
   const faceH = Math.hypot(mx(chin) - mx(top), my(chin) - my(top)) || 1;
+  // The face's own axes: u runs along the eye line (toward screen-right), v is perpendicular to it
+  // (toward the chin). Measuring along these instead of the screen's x/y means a slightly tilted
+  // head can't leak a turn into a nod: e.g. turning left no longer reads as looking down.
+  const eyeLen = Math.hypot(mx(eR) - mx(eL), my(eR) - my(eL)) || 1;
+  const ux = (mx(eR) - mx(eL)) / eyeLen, uy = (my(eR) - my(eL)) / eyeLen;
+  const vx = -uy, vy = ux;
   // Nose offset from the face's centre line approximates yaw; from its mid-height, pitch.
-  const headX = (mx(nose) - (mx(cR) + mx(cL)) / 2) / faceW;
-  const headY = (my(nose) - (my(top) + my(chin)) / 2) / faceH;
+  const sx = mx(nose) - (mx(cR) + mx(cL)) / 2, sy = my(nose) - (my(cR) + my(cL)) / 2;
+  const px = mx(nose) - (mx(top) + mx(chin)) / 2, py = my(nose) - (my(top) + my(chin)) / 2;
+  const headX = (sx * ux + sy * uy) / faceW;
+  const headY = (px * vx + py * vy) / faceH;
   // Roll: angle of the line between the outer eye corners, as seen in the mirror.
   const tilt = (Math.atan2(my(eR) - my(eL), mx(eR) - mx(eL)) * 180) / Math.PI;
 

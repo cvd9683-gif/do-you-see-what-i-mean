@@ -192,6 +192,9 @@ export class Calibration {
         meter(Math.abs(d) / (th * 3), 1 / 3);
         // First side accepts either sign (we learn the direction); the second must be opposite.
         if (Math.abs(d) < th) return false;
+        // The asked-for axis must be the main movement, so a turn can't pass as a nod (or vice versa).
+        const other = key === 'headX' ? 'headY' : 'headX';
+        if (Math.abs(f[other] - n[other]) / T[other] > Math.abs(d) / th) return false;
         return this.dir == null || Math.sign(d) !== this.dir;
       }
       case 'open':

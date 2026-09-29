@@ -5,6 +5,7 @@ import { OneEuro, mapAxis, BrushMapper, pickShape, DabTrail } from '../js/mappin
 import { Calibration, STEPS, DEFAULT_CALIBRATION, STRUGGLE_MS } from '../js/calibration.js';
 import { createSession, createMark, parseSession, serializeSession, colorChangeEvent, colorAt } from '../js/session.js';
 import { PALETTE } from '../js/config.js';
+import { extractFeatures } from '../js/faceTracker.js';
 
 const face = (o = {}) => ({
   present: true, t: 0, headX: 0, headY: 0, tilt: 0, mouthOpen: 0.03,
@@ -284,4 +285,38 @@ test('session JSON: color changes are stored and replayable by timestamp', () =>
   assert.equal(colorAt(back, 90000), '#FFB400');
   const junk = parseSession(JSON.stringify({ ...s, events: [{ type: 'colorChange', newColor: 'blue' }, { type: 'other' }] }));
   assert.equal(junk.events.length, 0, 'invalid events are dropped');
+});
+
+// Builds a MediaPipe-shaped result from points given in mirrored (on-screen) 0..1 space,
+// optionally rolled (tilted) by `deg` around the face centre.
+function fakeResult(points, deg = 0) {
+  const a = (deg * Math.PI) / 180;
+  const lms = Array.from({ length: 478 }, () => ({ x: 0.5, y: 0.5, z: 0 }));
+  for (const [i, [x, y]] of Object.entries(points)) {
+    const rx = 0.5 + (x - 0.5) * Math.cos(a) - (y - 0.5) * Math.sin(a);
+    const ry = 0.5 + (x - 0.5) * Math.sin(a) + (y - 0.5) * Math.cos(a);
+    lms[i] = { x: 1 - rx, y: ry, z: 0 };
+  }
+  return { faceLandmarks: [lms], faceBlendshapes: [{ categories: [] }] };
+}
+const TURNED_LEFT = { 1: [0.45, 0.5], 234: [0.65, 0.5], 454: [0.35, 0.5], 10: [0.5, 0.25], 152: [0.5, 0.75], 33: [0.6, 0.4], 263: [0.4, 0.4] };
+
+test('extractFeatures: a head turn on a tilted head does not read as a nod', () => {
+  const level = extractFeatures(fakeResult(TURNED_LEFT), 1, 1, 0);
+  assert.ok(level.headX < -0.1, `turned left reads as left (${level.headX})`);
+  assert.ok(Math.abs(level.headY) < 1e-9);
+  for (const deg of [-15, 15]) {
+    const tilted = extractFeatures(fakeResult(TURNED_LEFT, deg), 1, 1, 0);
+    assert.ok(Math.abs(tilted.headY) < 1e-9, `tilt ${deg}°: headY ${tilted.headY}`);
+    assert.ok(Math.abs(tilted.headX - level.headX) < 1e-9, `tilt ${deg}°: headX ${tilted.headX}`);
+    assert.ok(Math.abs(tilted.tilt - deg) < 1e-6, `tilt ${deg}° is still reported as roll`);
+  }
+});
+
+test('nod step: turning the head does not count as looking up or down', () => {
+  const cal = new Calibration(STEPS);
+  // Turning sideways with a little vertical leak must not satisfy the nod.
+  runCalibration(cal, { ...POSE, up: { headX: -0.1, headY: -0.03 }, down: { headX: 0.1, headY: 0.03 } }, 400);
+  assert.equal(cal.step.key, 'nod');
+  assert.equal(cal.status().targets[0].done, false);
 });
